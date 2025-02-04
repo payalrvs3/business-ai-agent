@@ -1,0 +1,19 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	is_web_search_required(is_web_search_required)
+	answer_user_query(answer_user_query)
+	duck_duck_go_search(duck_duck_go_search)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> is_web_search_required;
+	duck_duck_go_search --> answer_user_query;
+	is_web_search_required -. &nbsp;not_required&nbsp; .-> answer_user_query;
+	is_web_search_required -. &nbsp;required&nbsp; .-> duck_duck_go_search;
+	answer_user_query --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
