@@ -3,6 +3,7 @@ from typing import Any
 from flask import Flask, request, jsonify, Response, stream_with_context, g
 from flask_cors import CORS
 import os
+import psycopg2.extras
 import requests
 import sqlite3
 import time
