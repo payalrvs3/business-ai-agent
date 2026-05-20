@@ -153,9 +153,13 @@ AGENT_INTENT_COUNT = Counter("agent_intent_detections_total", "Intent detections
 
 # Constants & AI Clients
 CHAT_DB_PATH = os.getenv("CHAT_DB_PATH", "chat_history.db")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+if not GROQ_API_KEY:
+    logger.warning("GROQ_API_KEY is not set. Groq-powered responses will fail until it is configured.")
+
 groq_llm = ChatOpenAI(
     model_name="llama3-70b-8192",
-    openai_api_key=os.getenv("GROQ_API_KEY", "dummy_key_to_prevent_startup_crash"),
+    openai_api_key=GROQ_API_KEY or "dummy_key_to_prevent_startup_crash",
     openai_api_base="https://api.groq.com/openai/v1"
 )
 

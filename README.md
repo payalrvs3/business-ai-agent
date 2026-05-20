@@ -226,6 +226,7 @@ pip install -r requirements.txt
 # Create agent_code/.env with:
 # DATABASE_URL=postgresql://admin:root@localhost:5432/test_db
 # LLM_BASE_URL=http://127.0.0.1:11434/
+# GROQ_API_KEY=your_groq_api_key_here
 
 # Run
 python app.py
@@ -317,6 +318,7 @@ psql -U admin -d test_db -c "\dt"
 |----------|---------|-------------|---------|
 | `DATABASE_URL` | Agent, Web | PostgreSQL connection string | `postgresql://admin:root@localhost:5432/test_db` |
 | `LLM_BASE_URL` | Agent | Ollama base URL | `http://127.0.0.1:11434/` |
+| `GROQ_API_KEY` | Agent | Groq API key for `ChatOpenAI` calls that use the Groq OpenAI-compatible endpoint | — |
 | `PROMETHEUS_URL` | Agent | Prometheus API URL | `http://prometheus:9090` |
 | `LOKI_URL` | Agent | Loki API URL | `http://loki:3100` |
 | `AGENT_API_URL` | Dashboard, Web | Flask agent base URL | `http://localhost:5000` |
