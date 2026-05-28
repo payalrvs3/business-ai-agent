@@ -540,7 +540,6 @@ def import_notebook():
                     "type": r[1],
                     "category": r[2],
                     "amount": r[3],
-                    "description": r[4],
                     "hash": file_hash
                 } for r in rows
             ],
@@ -555,7 +554,12 @@ def import_notebook():
 @limiter.limit(IMPORT_RATE_LIMIT)
 @token_required
 def confirm_notebook():
-    data = request.json
+    data = request.get_json(silent=True)
+
+if not isinstance(data, dict):
+    return jsonify({
+        "error": "Invalid or missing JSON body"
+    }), 400
     bid = get_current_business_id()
     transactions = data.get("transactions", [])
     file_hash = data.get("hash")
