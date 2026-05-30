@@ -1,5 +1,7 @@
 from __future__ import annotations
 from typing import Any
+import csv
+import io
 from flask import Flask, request, jsonify, Response, stream_with_context, g
 from flask_cors import CORS
 from flask_limiter import Limiter
@@ -37,14 +39,15 @@ from langgraph.types import Command
 from logger.logger import logger
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST, REGISTRY
 from query_execution import stream_agent_sse_lines
-from auth import AuthError, decode_jwt_identity
+from auth import AuthError, decode_jwt_identity, require_jwt_secret
 from api_errors import internal_error_response
+from auth_passwords import SOCIAL_LOGIN_PASSWORD_HASH, verify_password
 
 load_dotenv()
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB
-app.config["SECRET_KEY"] = os.getenv("JWT_SECRET", "super-secret-business-key-2026")
+app.config["SECRET_KEY"] = require_jwt_secret(os.getenv("JWT_SECRET"))
 CORS(app)
 
 DEFAULT_RATE_LIMITS = [
@@ -81,6 +84,23 @@ def token_required(f):
 
 def get_current_business_id():
     return getattr(g, "business_id", None)
+
+def resolve_dashboard_business_id():
+    auth_header = request.headers.get("Authorization")
+    if auth_header:
+        identity = decode_jwt_identity(auth_header, app.config["SECRET_KEY"])
+        return identity["business_id"]
+
+    email = request.args.get("email", "").lower().strip()
+    if email:
+        rows = execute_read_query_params(
+            "SELECT business_id FROM users WHERE LOWER(email) = %s LIMIT 1",
+            (email,),
+        )
+        if rows:
+            return rows[0]["business_id"]
+
+    return get_current_business_id()
 
 @app.route("/api/auth/signup", methods=["POST"])
 @limiter.limit(AUTH_RATE_LIMIT)
@@ -142,7 +162,7 @@ def auth_login():
         cur.execute("SELECT user_id, business_id, name, password_hash FROM users WHERE email = %s", (email,))
         user = cur.fetchone()
 
-        if not user or not bcrypt.checkpw(password.encode("utf-8"), user["password_hash"].encode("utf-8")):
+        if not user or not verify_password(password, user.get("password_hash")):
             return jsonify({"message": "Invalid email or password"}), 401
 
         token = jwt.encode({
@@ -569,6 +589,13 @@ def _send_telegram_text(chat_id: int, text: str) -> None:
     ).raise_for_status()
 
 
+def _sse_stream_response(generator):
+    response = Response(stream_with_context(generator), mimetype="text/event-stream")
+    response.headers["Cache-Control"] = "no-cache, no-transform"
+    response.headers["X-Accel-Buffering"] = "no"
+    response.headers["Connection"] = "keep-alive"
+    return response
+
 
 # --- Dashboard API Endpoints ---
 
@@ -655,12 +682,8 @@ def onboarding():
         bid = str(uuid.uuid4())
         cur.execute("INSERT INTO businesses (business_id, business_name, industry_type, owner_name) VALUES (%s, %s, %s, %s)", 
                    (bid, business_name, data.get("business_category"), data.get("full_name")))
-        oauth_password_hash = bcrypt.hashpw(
-            uuid.uuid4().hex.encode("utf-8"),
-            bcrypt.gensalt(),
-        ).decode("utf-8")
         cur.execute("INSERT INTO users (business_id, name, email, password_hash) VALUES (%s, %s, %s, %s)",
-                   (bid, data.get("full_name"), email, oauth_password_hash))
+                   (bid, data.get("full_name"), email, SOCIAL_LOGIN_PASSWORD_HASH))
         conn.commit()
         return jsonify({"success": True, "business_id": bid}), 201
     finally:
@@ -820,6 +843,28 @@ def confirm_notebook():
         conn.close()
 
 # --- AI Chat API ---
+
+@app.route("/api/v1/query", methods=["POST", "GET"])
+@limiter.limit(CHAT_RATE_LIMIT)
+def query_agent():
+    input_query = request.args.get("input-query", "")
+    thread_id = request.args.get("thread-id", "")
+    business_id = request.args.get("business-id", "")
+
+    if not input_query:
+        return jsonify({"is_error": True, "error": "input query is required"}), 400
+    if not thread_id:
+        return jsonify({"is_error": True, "error": "thread-id is required"}), 400
+
+    return _sse_stream_response(
+        stream_agent_sse_lines(
+            input_query,
+            thread_id,
+            business_id,
+            on_chain_intent=lambda name: AGENT_INTENT_COUNT.labels(name).inc(),
+        )
+    )
+
 
 @app.route("/api/chat/send", methods=["POST"])
 @limiter.limit(CHAT_RATE_LIMIT)
@@ -1082,6 +1127,47 @@ def api_recent_transactions():
             r["amount"] = float(r["amount"] or 0)
             r["transaction_date"] = r["transaction_date"].strftime("%Y-%m-%d")
         return jsonify({"transactions": rows})
+    except Exception as exc:
+        return internal_error_response(exc)
+
+@app.route("/api/dashboard/export-csv", methods=["GET", "OPTIONS"])
+def api_export_dashboard_csv():
+    try:
+        bid = resolve_dashboard_business_id()
+        if not bid:
+            return jsonify({"message": "Authorization header or email is required"}), 401
+
+        period = request.args.get("period", "this_month")
+        start_date, end_date = get_period_dates(period)
+        rows = execute_read_query_params("""
+            SELECT transaction_id, transaction_date, type, category, amount, description
+            FROM daily_transactions
+            WHERE business_id = %s AND transaction_date BETWEEN %s AND %s
+            ORDER BY transaction_date DESC, transaction_id DESC
+        """, (bid, start_date, end_date))
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["transaction_id", "transaction_date", "type", "category", "amount", "description"])
+        for row in rows:
+            transaction_date = row["transaction_date"]
+            if hasattr(transaction_date, "strftime"):
+                transaction_date = transaction_date.strftime("%Y-%m-%d")
+            writer.writerow([
+                row["transaction_id"],
+                transaction_date,
+                row["type"],
+                row["category"],
+                row["amount"] or 0,
+                row["description"],
+            ])
+
+        filename = f"profitpilot_export_{period}_{date.today().isoformat()}.csv"
+        response = Response(output.getvalue(), mimetype="text/csv")
+        response.headers["Content-Disposition"] = f"attachment; filename={filename}"
+        return response
+    except AuthError as exc:
+        return jsonify({"message": exc.message}), exc.status_code
     except Exception as exc:
         return internal_error_response(exc)
 
