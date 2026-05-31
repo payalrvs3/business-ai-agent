@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { DragEvent } from "react";
 import Sidebar from "@/components/Sidebar";
@@ -217,7 +217,7 @@ export default function ImportPage() {
               className={`import-tab-btn ${activeTab === "none" ? "active" : ""}`}
               onClick={() => router.push("/")}
             >
-              Do not track
+              Don&apos;t track
             </button>
           </div>
 
@@ -262,7 +262,7 @@ export default function ImportPage() {
               ) : (
                 <>
                   <p className="manual-upload-tagline">
-                    No problem. Take a photo of your latest ledger entries and our AI will extract the data for you.
+                    &quot;No problem! Take a photo of your latest ledger entries and our AI will extract the data for you.&quot;
                   </p>
 
                   <div
@@ -343,7 +343,7 @@ export default function ImportPage() {
                   {activeTab === "excel" ? "Spreadsheet Upload" : "Accounting Software Export"}
                 </h3>
                 <p style={{ color: "var(--text-secondary)", fontSize: 14, marginBottom: 24 }}>
-                  Drop your exported .csv or .xlsx file here to sync transactions. Ensure you have date and amount
+                  Drop your exported .csv or .xlsx file here to sync transactions. Ensure you have &apos;date&apos; and &apos;amount&apos;
                   columns.
                 </p>
 

@@ -42,6 +42,7 @@ from query_execution import stream_agent_sse_lines
 from auth import AuthError, decode_jwt_identity, require_jwt_secret
 from api_errors import internal_error_response
 from auth_passwords import SOCIAL_LOGIN_PASSWORD_HASH, verify_password
+from swagger_docs import register_swagger_docs
 
 load_dotenv()
 
@@ -84,23 +85,6 @@ def token_required(f):
 
 def get_current_business_id():
     return getattr(g, "business_id", None)
-
-def resolve_dashboard_business_id():
-    auth_header = request.headers.get("Authorization")
-    if auth_header:
-        identity = decode_jwt_identity(auth_header, app.config["SECRET_KEY"])
-        return identity["business_id"]
-
-    email = request.args.get("email", "").lower().strip()
-    if email:
-        rows = execute_read_query_params(
-            "SELECT business_id FROM users WHERE LOWER(email) = %s LIMIT 1",
-            (email,),
-        )
-        if rows:
-            return rows[0]["business_id"]
-
-    return get_current_business_id()
 
 @app.route("/api/auth/signup", methods=["POST"])
 @limiter.limit(AUTH_RATE_LIMIT)
@@ -588,6 +572,24 @@ def _send_telegram_text(chat_id: int, text: str) -> None:
         timeout=30,
     ).raise_for_status()
 
+# --- Helper Functions (From Kushal-Dev) ---
+def get_period_dates(period):
+    end_date = date.today()
+    if period == "this_month":
+        start_date = end_date.replace(day=1)
+    elif period == "last_month":
+        last_month_end = end_date.replace(day=1) - timedelta(days=1)
+        start_date = last_month_end.replace(day=1)
+        end_date = last_month_end
+    elif period == "last_7_days":
+        start_date = end_date - timedelta(days=7)
+    elif period == "last_30_days":
+        start_date = end_date - timedelta(days=30)
+    elif period == "ytd":
+        start_date = date(end_date.year, 1, 1)
+    else:
+        start_date = end_date - timedelta(days=30)
+    return start_date, end_date
 
 def _sse_stream_response(generator):
     response = Response(stream_with_context(generator), mimetype="text/event-stream")
@@ -664,7 +666,11 @@ def api_forecast():
 def api_categories():
     bid = get_current_business_id()
     try:
-        rows = execute_read_query_params("SELECT DISTINCT category FROM daily_transactions WHERE category IS NOT NULL ORDER BY category")
+        rows = execute_read_query_params(
+            "SELECT DISTINCT category FROM daily_transactions "
+            "WHERE business_id = %s AND category IS NOT NULL ORDER BY category",
+            (bid,),
+        )
         return jsonify({"categories": [r["category"] for r in rows]})
     except Exception as exc:
         return internal_error_response(exc)
@@ -817,7 +823,13 @@ def import_notebook():
 @limiter.limit(IMPORT_RATE_LIMIT)
 @token_required
 def confirm_notebook():
-    data = request.json
+    data = request.get_json(silent=True)
+
+    if not isinstance(data, dict):
+        return jsonify({
+            "error": "Invalid or missing JSON body"
+        }), 400
+
     bid = get_current_business_id()
     transactions = data.get("transactions", [])
     file_hash = data.get("hash")
@@ -1131,12 +1143,10 @@ def api_recent_transactions():
         return internal_error_response(exc)
 
 @app.route("/api/dashboard/export-csv", methods=["GET", "OPTIONS"])
+@token_required
 def api_export_dashboard_csv():
     try:
-        bid = resolve_dashboard_business_id()
-        if not bid:
-            return jsonify({"message": "Authorization header or email is required"}), 401
-
+        bid = get_current_business_id()
         period = request.args.get("period", "this_month")
         start_date, end_date = get_period_dates(period)
         rows = execute_read_query_params("""
@@ -1166,25 +1176,8 @@ def api_export_dashboard_csv():
         response = Response(output.getvalue(), mimetype="text/csv")
         response.headers["Content-Disposition"] = f"attachment; filename={filename}"
         return response
-    except AuthError as exc:
-        return jsonify({"message": exc.message}), exc.status_code
     except Exception as exc:
         return internal_error_response(exc)
-
-def get_period_dates(period):
-    end_date = datetime.now().date()
-    if period == "this_month":
-        start_date = end_date.replace(day=1)
-    elif period == "last_month":
-        start_date = (end_date.replace(day=1) - timedelta(days=1)).replace(day=1)
-        end_date = (end_date.replace(day=1) - timedelta(days=1))
-    elif period == "last_7_days":
-        start_date = end_date - timedelta(days=7)
-    elif period == "last_30_days":
-        start_date = end_date - timedelta(days=30)
-    else:
-        start_date = date(2000, 1, 1)
-    return start_date, end_date
 
 @app.route("/api/dashboard/summary-sql", methods=["GET", "OPTIONS"])
 @token_required
@@ -1375,6 +1368,7 @@ def health():
     return jsonify({"status": "ok"})
 
 # Start Server
+register_swagger_docs(app)
 _init_chat_db()
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)

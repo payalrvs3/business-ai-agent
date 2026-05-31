@@ -79,8 +79,10 @@ def app_module(tmp_path_factory):
     spec = importlib.util.spec_from_file_location("profitpilot_agent_app", module_path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    _remove_import_stub("numpy")
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        _remove_import_stub("numpy")
     module.app.config.update(TESTING=True, RATELIMIT_ENABLED=False, SECRET_KEY="test-secret")
     return module
 
