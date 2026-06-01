@@ -122,3 +122,28 @@ def test_financial_overview_scoped_to_token_business(client, recorded_queries):
     sql, params = recorded_queries[-1]
     assert "business_id = %s" in sql
     assert params[0] == BUSINESS_A
+
+
+# ---------------------------------------------------------------------------
+# /api/dashboard/health-scores  (issue #222)
+# ---------------------------------------------------------------------------
+
+def test_health_scores_requires_token(client, recorded_queries):
+    resp = client.get("/api/dashboard/health-scores")
+    assert resp.status_code == 401
+    assert recorded_queries == []
+
+
+def test_health_scores_rejects_email_fallback(client, recorded_queries):
+    resp = client.get("/api/dashboard/health-scores?email=attacker@example.com")
+    assert resp.status_code == 401
+    assert recorded_queries == []
+
+
+def test_health_scores_scoped_to_token_business(client, recorded_queries):
+    resp = client.get("/api/dashboard/health-scores", headers=_auth(BUSINESS_A))
+    assert resp.status_code == 200
+    assert recorded_queries, "expected a DB query"
+    sql, params = recorded_queries[-1]
+    assert "business_id = %s" in sql
+    assert params[0] == BUSINESS_A
