@@ -1352,7 +1352,13 @@ def api_health_scores():
 def api_top_products():
     bid = get_current_business_id()
     try:
-        rows = execute_read_query_params("SELECT product_name, stock_quantity, selling_price, cost_price FROM products WHERE business_id = %s ORDER BY stock_quantity DESC LIMIT 10", (bid,))
+        rows = execute_read_query_params(
+            "SELECT product_name, stock_quantity, selling_price, cost_price, "
+            "(selling_price - cost_price) * stock_quantity AS business_value "
+            "FROM products WHERE business_id = %s "
+            "ORDER BY business_value DESC LIMIT 10",
+            (bid,)
+        )
         margin_amount = [float((r["selling_price"] or 0) - (r["cost_price"] or 0)) for r in rows]
         margin_pct = [
             round(((r["selling_price"] or 0) - (r["cost_price"] or 0)) / (r["selling_price"] or 1) * 100, 1)
@@ -1365,7 +1371,8 @@ def api_top_products():
             "stock": [int(r["stock_quantity"] or 0) for r in rows],
             "margin": margin_pct,
             "margin_amount": margin_amount,
-            "margin_pct": margin_pct
+            "margin_pct": margin_pct,
+            "business_value": [round(float(r["business_value"] or 0), 2) for r in rows]
         })
     except Exception as exc:
         return internal_error_response(exc)
