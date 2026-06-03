@@ -47,8 +47,8 @@ def test_internal_error_response_rejects_invalid_request_ids():
 
 def test_api_routes_do_not_return_raw_exception_strings_for_500s():
     root = Path(__file__).resolve().parents[1]
-    for relative_path in ("agent_code/app.py", "agent_code/app_main.py"):
-        source = (root / relative_path).read_text()
+    for relative_path in ("agent_code/app.py", "agent_code/app_main.py", "web/app.py"):
+        source = (root / relative_path).read_text(encoding="utf-8")
         assert 'jsonify({"error": str(' not in source
         assert 'jsonify({"message": str(' not in source
 
