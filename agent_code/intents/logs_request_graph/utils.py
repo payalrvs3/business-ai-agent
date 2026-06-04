@@ -24,6 +24,7 @@ from intents.logs_request_graph.structures import (
     LogsQueryParseOutput,
     LogsAnalysisOutput,
 )
+from api_errors import SAFE_INTERNAL_ERROR_MESSAGE
 
 load_dotenv()
 

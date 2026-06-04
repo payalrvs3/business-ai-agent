@@ -21,6 +21,7 @@ from intents.metrics_request_graph.structures import (
     MetricsQueryParseOutput,
     MetricsAnalysisOutput,
 )
+from api_errors import SAFE_INTERNAL_ERROR_MESSAGE
 
 load_dotenv()
 
