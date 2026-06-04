@@ -1087,179 +1087,199 @@ def confirm_notebook():
 @app.route("/api/v1/query", methods=["POST", "GET"])
 @limiter.limit(CHAT_RATE_LIMIT)
 def query_agent():
-    input_query = request.args.get("input-query", "")
-    thread_id = request.args.get("thread-id", "")
-    business_id = request.args.get("business-id", "")
+    try:
+        input_query = request.args.get("input-query", "")
+        thread_id = request.args.get("thread-id", "")
+        business_id = request.args.get("business-id", "")
 
-    if not input_query:
-        return jsonify({"is_error": True, "error": "input query is required"}), 400
-    if not thread_id:
-        return jsonify({"is_error": True, "error": "thread-id is required"}), 400
+        if not input_query:
+            return jsonify({"is_error": True, "error": "input query is required"}), 400
+        if not thread_id:
+            return jsonify({"is_error": True, "error": "thread-id is required"}), 400
 
-    return _sse_stream_response(
-        stream_agent_sse_lines(
-            input_query,
-            thread_id,
-            business_id,
-            on_chain_intent=lambda name: AGENT_INTENT_COUNT.labels(name).inc(),
+        return _sse_stream_response(
+            stream_agent_sse_lines(
+                input_query,
+                thread_id,
+                business_id,
+                on_chain_intent=lambda name: AGENT_INTENT_COUNT.labels(name).inc(),
+            )
         )
-    )
+    except Exception as exc:
+        logger.error("query_agent failed: %s", exc, exc_info=True)
+        return internal_error_response(exc)
 
 
 @app.route("/api/chat/send", methods=["POST"])
 @limiter.limit(CHAT_RATE_LIMIT)
 @token_required
 def api_chat_send():
-    data = request.get_json(silent=True)
-    if not isinstance(data, dict):
-        return jsonify({"error": "Invalid or missing JSON payload"}), 400
-    msg = data.get("message")
-    conv_id = data.get("conversation_id") or str(uuid.uuid4())
-    bid = get_current_business_id()
-    return Response(stream_with_context(stream_agent_sse_lines(msg, conv_id, bid)), mimetype="text/event-stream")
+    try:
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({"error": "Invalid or missing JSON payload"}), 400
+        msg = data.get("message")
+        conv_id = data.get("conversation_id") or str(uuid.uuid4())
+        bid = get_current_business_id()
+        return Response(stream_with_context(stream_agent_sse_lines(msg, conv_id, bid)), mimetype="text/event-stream")
+    except Exception as exc:
+        logger.error("api_chat_send failed: %s", exc, exc_info=True)
+        return internal_error_response(exc)
 
 @app.route("/api/chat/conversations", methods=["GET"])
 @limiter.limit(CHAT_RATE_LIMIT)
 @token_required
 def api_chat_conversations():
-    business_id, user_id = _chat_owner_filter()
-    db = _get_chat_db()
-    conversations = _list_serialized_conversations(
-        db,
-        business_id=business_id,
-        user_id=user_id,
-    )
-    return jsonify({"conversations": conversations})
+    try:
+        business_id, user_id = _chat_owner_filter()
+        db = _get_chat_db()
+        conversations = _list_serialized_conversations(
+            db,
+            business_id=business_id,
+            user_id=user_id,
+        )
+        return jsonify({"conversations": conversations})
+    except Exception as exc:
+        logger.error("api_chat_conversations failed: %s", exc, exc_info=True)
+        return internal_error_response(exc)
 
 @app.route("/api/chat/conversations/<conversation_id>", methods=["GET", "PUT", "DELETE"])
 @limiter.limit(CHAT_RATE_LIMIT)
 @token_required
 def api_chat_conversation(conversation_id: str):
-    business_id, user_id = _chat_owner_filter()
-    db = _get_chat_db()
+    try:
+        business_id, user_id = _chat_owner_filter()
+        db = _get_chat_db()
 
-    if request.method == "GET":
-        row = _get_conversation_row(
-            db,
-            conversation_id,
-            business_id=business_id,
-            user_id=user_id,
-        )
-        if row is None:
-            return jsonify({"error": "Conversation not found"}), 404
-        return jsonify({"conversation": _serialize_conversation(db, row)})
+        if request.method == "GET":
+            row = _get_conversation_row(
+                db,
+                conversation_id,
+                business_id=business_id,
+                user_id=user_id,
+            )
+            if row is None:
+                return jsonify({"error": "Conversation not found"}), 404
+            return jsonify({"conversation": _serialize_conversation(db, row)})
 
-    if request.method == "DELETE":
-        row = _get_conversation_row(
-            db,
-            conversation_id,
-            business_id=business_id,
-            user_id=user_id,
-        )
-        if row is None:
-            return jsonify({"error": "Conversation not found"}), 404
-        db.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
-        db.execute(
-            "DELETE FROM conversations WHERE conversation_id = ? AND business_id = ? AND user_id = ?",
-            (conversation_id, business_id, user_id),
-        )
+        if request.method == "DELETE":
+            row = _get_conversation_row(
+                db,
+                conversation_id,
+                business_id=business_id,
+                user_id=user_id,
+            )
+            if row is None:
+                return jsonify({"error": "Conversation not found"}), 404
+            db.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
+            db.execute(
+                "DELETE FROM conversations WHERE conversation_id = ? AND business_id = ? AND user_id = ?",
+                (conversation_id, business_id, user_id),
+            )
+            db.commit()
+            return ("", 204)
+
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({"error": "Invalid or missing JSON payload"}), 400
+        raw_messages = data.get("messages") or []
+        if not isinstance(raw_messages, list):
+            return jsonify({"error": "messages must be an array"}), 400
+
+        try:
+            messages = [_normalize_chat_message(message) for message in raw_messages]
+            created_at = _normalize_client_timestamp(data.get("createdAt"))
+            updated_at = _normalize_client_timestamp(data.get("updatedAt"))
+        except ValueError as exc:
+            return _chat_payload_error(exc)
+
+        try:
+            row = _upsert_chat_conversation(
+                db,
+                conversation_id,
+                business_id=business_id,
+                user_id=user_id,
+                title=str(data.get("title") or "New Chat"),
+                created_at=created_at,
+                updated_at=updated_at,
+            )
+        except PermissionError:
+            return jsonify({"error": "Conversation is not accessible"}), 403
+
+        for message in messages:
+            _save_chat_message(db, conversation_id, message)
         db.commit()
-        return ("", 204)
 
-    data = request.get_json(silent=True)
-    if not isinstance(data, dict):
-        return jsonify({"error": "Invalid or missing JSON payload"}), 400
-    raw_messages = data.get("messages") or []
-    if not isinstance(raw_messages, list):
-        return jsonify({"error": "messages must be an array"}), 400
-
-    try:
-        messages = [_normalize_chat_message(message) for message in raw_messages]
-        created_at = _normalize_client_timestamp(data.get("createdAt"))
-        updated_at = _normalize_client_timestamp(data.get("updatedAt"))
-    except ValueError as exc:
-        return _chat_payload_error(exc)
-
-    try:
-        row = _upsert_chat_conversation(
+        row = _get_conversation_row(
             db,
             conversation_id,
             business_id=business_id,
             user_id=user_id,
-            title=str(data.get("title") or "New Chat"),
-            created_at=created_at,
-            updated_at=updated_at,
         )
-    except PermissionError:
-        return jsonify({"error": "Conversation is not accessible"}), 403
-
-    for message in messages:
-        _save_chat_message(db, conversation_id, message)
-    db.commit()
-
-    row = _get_conversation_row(
-        db,
-        conversation_id,
-        business_id=business_id,
-        user_id=user_id,
-    )
-    return jsonify({"conversation": _serialize_conversation(db, row)})
+        return jsonify({"conversation": _serialize_conversation(db, row)})
+    except Exception as exc:
+        logger.error("api_chat_conversation failed: %s", exc, exc_info=True)
+        return internal_error_response(exc)
 
 @app.route("/api/chat/conversations/<conversation_id>/messages", methods=["POST"])
 @limiter.limit(CHAT_RATE_LIMIT)
 @token_required
 def api_chat_conversation_messages(conversation_id: str):
-    business_id, user_id = _chat_owner_filter()
-    data = request.get_json(silent=True)
-    if not isinstance(data, dict):
-        return jsonify({"error": "Invalid or missing JSON payload"}), 400
-    db = _get_chat_db()
-
     try:
-        message = _normalize_chat_message(data.get("message"))
-        created_at = _normalize_client_timestamp(data.get("createdAt")) or message["timestamp"]
-        updated_at = _normalize_client_timestamp(data.get("updatedAt")) or message["timestamp"]
-    except ValueError as exc:
-        return _chat_payload_error(exc)
+        business_id, user_id = _chat_owner_filter()
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({"error": "Invalid or missing JSON payload"}), 400
+        db = _get_chat_db()
 
-    try:
-        _upsert_chat_conversation(
+        try:
+            message = _normalize_chat_message(data.get("message"))
+            created_at = _normalize_client_timestamp(data.get("createdAt")) or message["timestamp"]
+            updated_at = _normalize_client_timestamp(data.get("updatedAt")) or message["timestamp"]
+        except ValueError as exc:
+            return _chat_payload_error(exc)
+
+        try:
+            _upsert_chat_conversation(
+                db,
+                conversation_id,
+                business_id=business_id,
+                user_id=user_id,
+                title=str(data.get("title") or "New Chat"),
+                created_at=created_at,
+                updated_at=updated_at,
+            )
+        except PermissionError:
+            return jsonify({"error": "Conversation is not accessible"}), 403
+
+        _save_chat_message(db, conversation_id, message)
+        db.execute(
+            """
+            UPDATE conversations
+            SET client_updated_at = ?, updated_at = ?, title = ?
+            WHERE conversation_id = ? AND business_id = ? AND user_id = ?
+            """,
+            (
+                updated_at or message["timestamp"] or int(time.time() * 1000),
+                _to_sqlite_timestamp(updated_at or message["timestamp"]),
+                str(data.get("title") or "New Chat").strip() or "New Chat",
+                conversation_id,
+                business_id,
+                user_id,
+            ),
+        )
+        db.commit()
+
+        row = _get_conversation_row(
             db,
             conversation_id,
             business_id=business_id,
             user_id=user_id,
-            title=str(data.get("title") or "New Chat"),
-            created_at=created_at,
-            updated_at=updated_at,
         )
-    except PermissionError:
-        return jsonify({"error": "Conversation is not accessible"}), 403
-
-    _save_chat_message(db, conversation_id, message)
-    db.execute(
-        """
-        UPDATE conversations
-        SET client_updated_at = ?, updated_at = ?, title = ?
-        WHERE conversation_id = ? AND business_id = ? AND user_id = ?
-        """,
-        (
-            updated_at or message["timestamp"] or int(time.time() * 1000),
-            _to_sqlite_timestamp(updated_at or message["timestamp"]),
-            str(data.get("title") or "New Chat").strip() or "New Chat",
-            conversation_id,
-            business_id,
-            user_id,
-        ),
-    )
-    db.commit()
-
-    row = _get_conversation_row(
-        db,
-        conversation_id,
-        business_id=business_id,
-        user_id=user_id,
-    )
-    return jsonify({"conversation": _serialize_conversation(db, row)}), 201
+        return jsonify({"conversation": _serialize_conversation(db, row)}), 201
+    except Exception as exc:
+        logger.error("api_chat_conversation_messages failed: %s", exc, exc_info=True)
+        return internal_error_response(exc)
 
 @app.route("/api/dashboard/financial-overview", methods=["GET", "OPTIONS"])
 @token_required
