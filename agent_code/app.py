@@ -916,7 +916,13 @@ def telegram_webhook():
             _send_telegram_text(chat_id, reply)
             return jsonify({"ok": True})
 
-        business_id = DEFAULT_BUSINESS_ID or "550e8400-e29b-41d4-a716-446655440000"
+        # --- FIX: Remove static default business ID ---
+        if not DEFAULT_BUSINESS_ID:
+            logger.error("Telegram webhook: DEFAULT_BUSINESS_ID environment variable is not set.")
+            _send_telegram_text(chat_id, "Service temporarily unavailable. Please try again later.")
+            return jsonify({"ok": True})
+
+        business_id = DEFAULT_BUSINESS_ID
         answer = _run_agent_to_text(text, f"tg-{chat_id}", business_id)
         _send_telegram_text(chat_id, answer)
         return jsonify({"ok": True})
