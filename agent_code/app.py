@@ -146,7 +146,8 @@ def auth_signup():
             business_id (str): UUID of the newly created business.
             user (dict): Basic user info with 'name' and 'email' keys.
         HTTP 201 on successful registration.
-        HTTP 400 if any required fields are missing.
+
+        HTTP 400 if any of email, password, name, or business_name are missing.
         HTTP 409 if the email address is already registered.
         HTTP 500 on unexpected server error.
 
@@ -206,25 +207,27 @@ def auth_login():
 
     Expects a JSON request body with:
         email (str): The user's registered email address (case-insensitive).
-        password (str): The user's plain-text password.
+        password (str): The user's plain-text password (verified against bcrypt hash).
 
     Returns:
         JSON response containing:
             token (str): Signed JWT valid for 7 days (HS256).
-            business_id (str): The authenticated user's business UUID.
+            business_id (str): UUID of the user's associated business.
             user (dict): Basic user info with 'name' and 'email' keys.
-        HTTP 200 on success.
-        HTTP 400 if email or password fields are missing.
-        HTTP 401 if credentials are invalid or user does not exist.
+        HTTP 200 on successful authentication.
+        HTTP 400 if email or password are missing.
+        HTTP 401 if the email is not found or the password does not match.
         HTTP 500 on unexpected server error.
 
     Side effects:
-        Queries the PostgreSQL users table to validate credentials.
+        Reads from the PostgreSQL users table.
         Rate-limited to AUTH_RATE_LIMIT (default: 5 per minute) per IP.
     """
+
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return jsonify({"message": "Invalid or missing JSON payload"}), 400
+
     email = data.get("email", "").lower().strip()
     password = data.get("password")
 
@@ -1674,4 +1677,6 @@ def health():
 register_swagger_docs(app)
 _init_chat_db()
 if __name__ == "__main__":
+
     app.run(host="0.0.0.0", port=5000, debug=os.getenv("FLASK_DEBUG") == "1")
+
