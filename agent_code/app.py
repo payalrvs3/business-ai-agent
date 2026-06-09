@@ -1610,6 +1610,34 @@ def api_export_dashboard_csv():
 @app.route("/api/dashboard/summary-sql", methods=["GET", "OPTIONS"])
 @token_required
 def api_dashboard_summary():
+    """
+    Retrieve dashboard summary metrics for the authenticated business.
+
+    This endpoint generates aggregated dashboard statistics for a
+    specified reporting period. The business context is determined
+    from the authenticated user, and the reporting period is derived
+    from the request query parameters.
+
+    Query Parameters:
+        period (str, optional):
+            Reporting period used to calculate summary metrics.
+            Defaults to "this_month".
+
+    Returns:
+        flask.Response:
+            A JSON response containing aggregated dashboard summary
+            data for the selected reporting period.
+
+    Side Effects:
+        - Retrieves the authenticated user's business ID.
+        - Calculates date ranges based on the selected period.
+        - Executes database queries to generate summary metrics.
+
+    Raises:
+        Exceptions raised during date calculation, database access,
+        or data aggregation are handled and returned by the API's
+        error handling mechanism.
+    """
     bid = get_current_business_id()
     period = request.args.get("period", "this_month")
     start_date, end_date = get_period_dates(period)
